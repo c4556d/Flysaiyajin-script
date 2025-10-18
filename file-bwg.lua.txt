@@ -1,4 +1,3 @@
-local script = [[
 -- ⚡ Saiyajin Flight - UI estilizada final (botones circulares y flechas)
 -- R6 - LocalScript en StarterPlayerScripts
 -- Controles: WASD + Space (subir) + LeftCtrl (bajar) + cruceta táctil
@@ -319,4 +318,198 @@ local function setupCharacter(character)
 	local function stopBoost()
 		if not boosting then return end
 		boosting = false
-		flySpeed
+		flySpeed = defaultSpeed
+
+		-- detener animaciones de boost
+		if boostHeadTrack.IsPlaying then boostHeadTrack:Stop() end
+		if boostBodyTrack.IsPlaying then boostBodyTrack:Stop() end
+
+		-- volver FOV y UI
+		tweenFOV(normalFOV)
+		TweenService:Create(boostBtn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(255,50,50)}):Play()
+		boostBtn.Text = "⇀"
+		tweenButtonPulse(boostBtn, false)
+
+		bv.MaxForce = Vector3.new(4000,4000,4000)
+
+		-- reactivar W anim si W está presionado
+		if move.W then
+			activeDir = "W"
+			playFrozen(forwardTorsoTrack)
+			playFrozen(forwardLegsTrack)
+		else
+			activeDir = nil
+		end
+	end
+
+	-- Boost button click
+	table.insert(conns, boostBtn.MouseButton1Click:Connect(function()
+		if not flying then return end
+		local forwardInput = (move.W and 1 or 0) - (move.S and 1 or 0)
+		local rightInput   = (move.D and 1 or 0) - (move.A and 1 or 0)
+		local upInput      = (move.Up and 1 or 0) - (move.Down and 1 or 0)
+		if math.abs(forwardInput) + math.abs(rightInput) + math.abs(upInput) <= 0 then return end
+
+		if boosting then stopBoost() else startBoost() end
+	end))
+
+	-- Fly button click (toggle)
+	table.insert(conns, flyBtn.MouseButton1Click:Connect(function()
+		flying = not flying
+		if flying then
+			flyBtn.Text = "✈"
+			TweenService:Create(flyBtn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(0,255,100)}):Play()
+			humanoid.PlatformStand = true
+			bv.MaxForce = Vector3.new(4000,4000,4000)
+			bg.MaxTorque = Vector3.new(4000,4000,4000)
+			tweenButtonPulse(flyBtn, true)
+		else
+			flyBtn.Text = "✈"
+			TweenService:Create(flyBtn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(255,50,50)}):Play()
+			humanoid.PlatformStand = false
+			bv.MaxForce = Vector3.new(0,0,0)
+			bg.MaxTorque = Vector3.new(0,0,0)
+			-- apagar anims y boost
+			stopAllAnim()
+			if boosting then stopBoost() end
+			activeDir = nil
+		end
+	end))
+
+	-- RENDER: movimiento, animaciones y lógica boost/idle
+	local renderConn
+	renderConn = RunService.RenderStepped:Connect(function(dt)
+		if not flying then return end
+
+		local cam = workspace.CurrentCamera
+		local cf = cam.CFrame
+
+		-- entradas numéricas
+		local forwardInput = (move.W and 1 or 0) - (move.S and 1 or 0)
+		local rightInput   = (move.D and 1 or 0) - (move.A and 1 or 0)
+		local upInput      = (move.Up and 1 or 0) - (move.Down and 1 or 0)
+
+		-- construir desiredDir según cámara (incluye vertical componente)
+		local desiredDir = Vector3.zero
+		desiredDir += cf.LookVector * forwardInput
+		desiredDir += cf.RightVector * rightInput
+		desiredDir += Vector3.new(0,1,0) * upInput
+
+		-- Si boosting -> prioridad Boost (ya manejado por startBoost/stopBoost)
+		local newActive = nil
+		if boosting then
+			newActive = "Boost"
+		else
+			if forwardInput ~= 0 then newActive = "W"
+			elseif move.S then newActive = "S"
+			elseif move.A then newActive = "A"
+			elseif move.D then newActive = "D"
+			else newActive = "Idle" end
+		end
+
+		-- actualizar animaciones si cambió la dirección activa (Boost detiene W)
+		if newActive ~= activeDir then
+			stopAllAnim()
+			activeDir = newActive
+
+			if activeDir == "W" then
+				playFrozen(forwardTorsoTrack); playFrozen(forwardLegsTrack)
+			elseif activeDir == "S" then
+				playFrozen(backTorsoTrack); playFrozen(backLegsTrack)
+			elseif activeDir == "A" then
+				playFrozen(leftTrack)
+			elseif activeDir == "D" then
+				playFrozen(rightTrack)
+			elseif activeDir == "Idle" then
+				playFrozen(idleLegsTrack); playFrozen(idleTorsoTrack)
+			elseif activeDir == "Boost" then
+				-- asegurar boost playing (si no fue iniciado desde botón)
+				if not boostHeadTrack.IsPlaying then boostHeadTrack:Play() end
+				if not boostBodyTrack.IsPlaying then boostBodyTrack:Play() end
+				boostHeadTrack:AdjustSpeed(1)
+				boostBodyTrack:AdjustSpeed(1)
+			end
+		end
+
+		-- habilitar/deshabilitar UI del boost según movimiento
+		local movingNow = math.abs(forwardInput) + math.abs(rightInput) + math.abs(upInput) > 0
+		if movingNow and flying then
+			if not boosting then
+				TweenService:Create(boostBtn, TweenInfo.new(0.12), {BackgroundColor3 = Color3.fromRGB(0,150,255)}):Play()
+				-- mostrar como usable (si no boosting, color azulado tenue)
+				TweenService:Create(boostBtn, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
+			else
+				TweenService:Create(boostBtn, TweenInfo.new(0.12), {BackgroundColor3 = Color3.fromRGB(255,170,0)}):Play()
+			end
+			boostBtn.Active = true
+		else
+			if not boosting then
+				TweenService:Create(boostBtn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(120,120,120)}):Play()
+				TweenService:Create(boostBtn, TweenInfo.new(0.2), {BackgroundTransparency = 0.35}):Play()
+			end
+			boostBtn.Active = false
+			-- si estaba boosteando y dejo de moverse -> stopBoost
+			if boosting and not movingNow then stopBoost() end
+		end
+
+		-- movimiento físico
+		if desiredDir.Magnitude > 0.001 then
+			local desiredVel = desiredDir.Unit * flySpeed
+			local lerpFactor = math.clamp(accel * dt, 0, 1)
+			bv.Velocity = bv.Velocity:Lerp(desiredVel, lerpFactor)
+		else
+			t = t + dt * floatSpeed
+			local floatY = math.sin(t * 6) * floatAmplitude
+			local desiredVel = Vector3.new(0, floatY, 0)
+			local lerpFactor = math.clamp(accel * dt, 0, 1)
+			bv.Velocity = bv.Velocity:Lerp(desiredVel, lerpFactor)
+		end
+
+		-- inclinacion: forzar 90° en boost, sino normales
+		local tiltX, tiltZ = 0, 0
+		if boosting then
+			tiltX = -90
+			tiltZ = 0
+		else
+			if move.W then tiltX = -tiltFrontBack end
+			if move.S then tiltX = tiltFrontBack end
+			if move.A then tiltZ = tiltSides end
+			if move.D then tiltZ = -tiltSides end
+		end
+
+		local targetCF = CFrame.new(hrp.Position, hrp.Position + cf.LookVector) * CFrame.Angles(math.rad(tiltX), 0, math.rad(tiltZ))
+		local lerpAmount = boosting and 0.8 or tiltSmooth
+		bg.CFrame = bg.CFrame:Lerp(targetCF, lerpAmount)
+	end)
+
+	table.insert(conns, renderConn)
+
+	-- cleanup
+	currentCleanup = function()
+		for _, c in ipairs(conns) do if c and c.Disconnect then c:Disconnect() end end
+		if renderConn and renderConn.Disconnect then renderConn:Disconnect() end
+		safeDestroy(bv); safeDestroy(bg)
+		local exist = guiParent:FindFirstChild("SaiyanFlightUI")
+		if exist then exist:Destroy() end
+		stopAllAnim()
+		-- reset FOV por si quedó en boost
+		pcall(function() TweenService:Create(workspace.CurrentCamera, TweenInfo.new(0.15), {FieldOfView = normalFOV}):Play() end)
+	end
+
+	return {
+		cleanup = currentCleanup
+	}
+end
+
+-- init + respawn handling
+local function init()
+	local char = player.Character or player.CharacterAdded:Wait()
+	setupCharacter(char)
+	player.CharacterAdded:Connect(function(c)
+		if currentCleanup then currentCleanup() currentCleanup = nil end
+		task.wait(0.12)
+		setupCharacter(c)
+	end)
+end
+
+init()
