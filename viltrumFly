@@ -1,0 +1,577 @@
+-- ⚡ Viltrumita Flight (R6) - 3 Boosts en un solo botón (clics sucesivos)
+-- LocalScript -> StarterPlayer > StarterPlayerScripts
+-- Versión: manejo exclusivo de animaciones W/S para evitar solapamientos
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local guiParent = player:WaitForChild("PlayerGui")
+
+local currentCleanup
+local function safeDestroy(inst) if inst and inst.Parent then inst:Destroy() end end
+
+-- TWEENS helpers
+local function tweenColor(inst, color, dur)
+	dur = dur or 0.18
+	if not inst then return end
+	local t = TweenService:Create(inst, TweenInfo.new(dur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {BackgroundColor3 = color})
+	t:Play()
+	return t
+end
+
+local function tweenJump(inst, scale, dur)
+	if not inst then return end
+	scale = scale or 1.10
+	dur = dur or 0.12
+	local base = inst.Size
+	local up = UDim2.new(base.X.Scale, base.X.Offset * scale, base.Y.Scale, base.Y.Offset * scale)
+	local upT = TweenService:Create(inst, TweenInfo.new(dur/2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = up})
+	local downT = TweenService:Create(inst, TweenInfo.new(dur/2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = base})
+	upT:Play(); upT.Completed:Wait(); downT:Play()
+end
+
+-- UI creation (capsule fly + single boost toggle + cruceta)
+local function createUI()
+	local existing = guiParent:FindFirstChild("ViltrumUI")
+	if existing then existing:Destroy() end
+
+	local gui = Instance.new("ScreenGui", guiParent)
+	gui.Name = "ViltrumUI"
+	gui.ResetOnSpawn = false
+
+	-- top container
+	local topFrame = Instance.new("Frame", gui)
+	topFrame.Size = UDim2.new(0, 420, 0, 110)
+	topFrame.Position = UDim2.new(1, -220, 0, 18)
+	topFrame.AnchorPoint = Vector2.new(0.5, 0)
+	topFrame.BackgroundTransparency = 1
+
+	-- Fly capsule (derecha)
+	local flyBtn = Instance.new("TextButton", topFrame)
+	flyBtn.Name = "FlyButton"
+	flyBtn.Size = UDim2.new(0, 160, 0, 52)
+	flyBtn.Position = UDim2.new(0.85, 0, 0.5, 0)
+	flyBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+	flyBtn.Text = "✈  Fly"
+	flyBtn.TextColor3 = Color3.new(1,1,1)
+	flyBtn.Font = Enum.Font.GothamBold
+	flyBtn.TextSize = 20
+	flyBtn.BackgroundColor3 = Color3.fromRGB(200,50,50) -- off rojo
+	flyBtn.BackgroundTransparency = 0.28
+	flyBtn.BorderSizePixel = 0
+	flyBtn.AutoButtonColor = false
+	local flyCorner = Instance.new("UICorner", flyBtn); flyCorner.CornerRadius = UDim.new(1,0)
+
+	-- Boost single (misma dimensión que Fly pero a la izquierda) -> cicla 0..3
+	local boostBtn = Instance.new("TextButton", topFrame)
+	boostBtn.Name = "BoostToggle"
+	boostBtn.Size = UDim2.new(0, 160, 0, 52) -- mismo tamaño que fly
+	boostBtn.Position = UDim2.new(0.55, 0, 0.5, 0) -- a la izquierda del fly
+	boostBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+	boostBtn.Text = "Boost Off"
+	boostBtn.TextColor3 = Color3.new(1,1,1)
+	boostBtn.Font = Enum.Font.GothamBold
+	boostBtn.TextSize = 18
+	boostBtn.BackgroundColor3 = Color3.fromRGB(0,120,220) -- off azul (estado 0)
+	boostBtn.BackgroundTransparency = 0.28
+	boostBtn.BorderSizePixel = 0
+	boostBtn.AutoButtonColor = false
+	local boostCorner = Instance.new("UICorner", boostBtn); boostCorner.CornerRadius = UDim.new(1,0)
+
+	-- small label under fly (optional)
+	local flyLabel = Instance.new("TextLabel", topFrame)
+	flyLabel.AnchorPoint = Vector2.new(0.5, 0)
+	flyLabel.Position = UDim2.new(0.85,0,0.95,0)
+	flyLabel.BackgroundTransparency = 1
+	flyLabel.Text = "Fly"
+	flyLabel.Font = Enum.Font.Gotham
+	flyLabel.TextSize = 12
+	flyLabel.TextColor3 = Color3.new(1,1,1)
+
+	-- cruceta bottom-left (circular buttons)
+	local cross = Instance.new("Frame", gui)
+	cross.Size = UDim2.new(0, 170, 0, 170)
+	cross.Position = UDim2.new(0, 20, 1, -190)
+	cross.BackgroundTransparency = 1
+
+	local function makeDirBtn(parent, sz, pos, arrow)
+		local b = Instance.new("TextButton", parent)
+		b.Size = sz
+		b.Position = pos
+		b.AnchorPoint = Vector2.new(0.5, 0.5)
+		b.Text = arrow
+		b.Font = Enum.Font.GothamBlack
+		b.TextSize = 22
+		b.TextColor3 = Color3.new(1,1,1)
+		b.BackgroundColor3 = Color3.fromRGB(0,0,0)
+		b.BackgroundTransparency = 0.45
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = false
+		local corner = Instance.new("UICorner", b); corner.CornerRadius = UDim.new(1,0)
+		return b
+	end
+
+	local btnUp = makeDirBtn(cross, UDim2.new(0,54,0,54), UDim2.new(0.5,0,0.22,0), "▲")
+	local btnLeft = makeDirBtn(cross, UDim2.new(0,54,0,54), UDim2.new(0.22,0,0.5,0), "◄")
+	local btnDown = makeDirBtn(cross, UDim2.new(0,54,0,54), UDim2.new(0.5,0,0.78,0), "▼")
+	local btnRight = makeDirBtn(cross, UDim2.new(0,54,0,54), UDim2.new(0.78,0,0.5,0), "►")
+
+	return {
+		gui = gui,
+		flyBtn = flyBtn,
+		boostBtn = boostBtn,
+		btnW = btnUp, btnA = btnLeft, btnS = btnDown, btnD = btnRight
+	}
+end
+
+-- Setup character + flight logic
+local function setupCharacter(character)
+	if currentCleanup then currentCleanup() currentCleanup = nil end
+
+	local hrp = character:WaitForChild("HumanoidRootPart")
+	local humanoid = character:WaitForChild("Humanoid")
+	local camera = workspace.CurrentCamera
+
+	-- configuración (valores pedidos)
+	local defaultSpeed = 24
+	local boostSpeed1 = 38    -- Normal Boost
+	local boostSpeed2 = 68    -- Fast Boost
+	local boostSpeed3 = 145   -- Viltrum boost
+
+	local normalFOV = camera.FieldOfView or 70
+	local boostFOVs = { [0]=normalFOV, [1]=90, [2]=110, [3]=140 }
+
+	local tiltFrontBack = 25
+	local tiltSides = 25
+	local tiltSmooth = 0.18
+	local floatAmplitude = 0.6
+	local floatSpeed = 1.8
+	local accel = 12
+
+	local flying = false
+	local t = 0
+
+	local input = {W=false, A=false, S=false, D=false, Up=false, Down=false}
+
+	-- body movers
+	local bv, bg
+	local function createBodyMovers()
+		if bv and bv.Parent then return end
+		bv = Instance.new("BodyVelocity"); bv.Name="ViltrumBV"; bv.P=3000; bv.Velocity=Vector3.new(0,0,0); bv.MaxForce=Vector3.new(0,0,0); bv.Parent=hrp
+		bg = Instance.new("BodyGyro"); bg.Name="ViltrumBG"; bg.P=10000; bg.D=200; bg.CFrame=hrp.CFrame; bg.MaxTorque=Vector3.new(0,0,0); bg.Parent=hrp
+	end
+	local function destroyBodyMovers() safeDestroy(bv); safeDestroy(bg); bv=nil; bg=nil end
+	local function enableForces() if bv then bv.MaxForce=Vector3.new(400000,400000,400000) end; if bg then bg.MaxTorque=Vector3.new(400000,400000,400000) end end
+	local function disableForces() if bv then bv.MaxForce=Vector3.new(0,0,0) end; if bg then bg.MaxTorque=Vector3.new(0,0,0) end end
+
+	-- UI
+	local ui = createUI()
+	local flyBtn = ui.flyBtn
+	local boostBtn = ui.boostBtn
+	local btnW, btnA, btnS, btnD = ui.btnW, ui.btnA, ui.btnS, ui.btnD
+
+	-- =========================
+	-- Animaciones (IDs) según lo pedido
+	-- =========================
+	local animIdle      = Instance.new("Animation"); animIdle.AnimationId      = "rbxassetid://80979207"
+	local animIdleExtra = Instance.new("Animation"); animIdleExtra.AnimationId = "rbxassetid://73033633" -- reproducir congelada
+	local animW         = Instance.new("Animation"); animW.AnimationId         = "rbxassetid://69427262"
+	local animS         = Instance.new("Animation"); animS.AnimationId         = "rbxassetid://60355819"
+	local animBoostNorm = Instance.new("Animation"); animBoostNorm.AnimationId = "rbxassetid://90872539"  -- Normal boost (congelada)
+	local animBoostFast = Instance.new("Animation"); animBoostFast.AnimationId = "rbxassetid://56153856"  -- Fast boost (congelada)
+	local animBoostVil  = Instance.new("Animation"); animBoostVil.AnimationId  = "rbxassetid://75476911" -- Viltrum boost (congelada)
+	local animLanding   = Instance.new("Animation"); animLanding.AnimationId   = "rbxassetid://69803972" -- anim de aterrizaje (congelada)
+
+	local idleTrack      = humanoid:LoadAnimation(animIdle)
+	local idleExtraTrack = humanoid:LoadAnimation(animIdleExtra)
+	local wTrack         = humanoid:LoadAnimation(animW)
+	local sTrack         = humanoid:LoadAnimation(animS)
+	local boostNormTrack = humanoid:LoadAnimation(animBoostNorm)
+	local boostFastTrack = humanoid:LoadAnimation(animBoostFast)
+	local boostVilTrack  = humanoid:LoadAnimation(animBoostVil)
+	local landingTrack   = humanoid:LoadAnimation(animLanding)
+
+	for _,tr in pairs({idleTrack,idleExtraTrack,wTrack,sTrack,boostNormTrack,boostFastTrack,boostVilTrack,landingTrack}) do
+		tr.Priority = Enum.AnimationPriority.Action
+		tr.Looped = true
+	end
+
+	-- helpers anim
+	local function playNormal(track) if track and not track.IsPlaying then track:Play() end; if track then track:AdjustSpeed(1) end end
+	local function playFrozen(track) if track and not track.IsPlaying then track:Play() end; if track then track:AdjustSpeed(0) end end
+	local function stopTrack(track)
+		if not track then return end
+		pcall(function()
+			if track.IsPlaying then track:Stop() end
+			track:AdjustSpeed(1)
+		end)
+	end
+	local function stopAllAnim()
+		for _,tr in pairs({idleTrack,idleExtraTrack,wTrack,sTrack,boostNormTrack,boostFastTrack,boostVilTrack,landingTrack}) do
+			pcall(function() stopTrack(tr) end)
+		end
+	end
+
+	-- Inicialmente reproducir la idle combinada: idle normal (no congelada) + idleExtra congelada
+	local function ensureIdleCombined()
+		stopAllAnim()
+		playNormal(idleTrack)
+		playFrozen(idleExtraTrack) -- la nueva pedida está congelada desde el principio
+	end
+
+	-- Estados de boost: 0 = off, 1 = Normal, 2 = Fast, 3 = Viltrum
+	local boostState = 0
+
+	-- FOV tween
+	local function tweenFOV(target)
+		if not camera then return end
+		pcall(function()
+			local tw = TweenService:Create(camera, TweenInfo.new(0.22, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {FieldOfView = target})
+			tw:Play()
+		end)
+	end
+
+	-- helper para actualizar UI segun estado
+	local function updateBoostUI(state, pulse)
+		if state == 0 then
+			boostBtn.Text = "Boost Off"
+			tweenColor(boostBtn, Color3.fromRGB(0,120,220), 0.18) -- azul (off)
+		elseif state == 1 then
+			boostBtn.Text = "Normal Boost"
+			tweenColor(boostBtn, Color3.fromRGB(115,200,255), 0.15) -- celeste (activo)
+		elseif state == 2 then
+			boostBtn.Text = "Fast Boost"
+			tweenColor(boostBtn, Color3.fromRGB(255,210,80), 0.15) -- amarillo
+		elseif state == 3 then
+			boostBtn.Text = "Viltrum Boost"
+			tweenColor(boostBtn, Color3.fromRGB(220,50,50), 0.15) -- rojo
+		end
+		if pulse then task.spawn(function() tweenJump(boostBtn, 1.08) end) end
+	end
+
+	-- applyState: detiene cualquier anim previa y aplica la del nuevo estado (congeladas según pediste)
+	local function applyBoostState(state)
+		-- stop everything first to avoid overlaps
+		stopAllAnim()
+
+		-- set FOV based on state
+		local targetFOV = boostFOVs[state or 0] or normalFOV
+		tweenFOV(targetFOV)
+
+		if state == 0 then
+			-- off: fuerzas normales
+			bv.MaxForce = Vector3.new(400000,400000,400000)
+			-- reactivar anim segun input (si corresponde)
+			if input.W then
+				playNormal(wTrack); playFrozen(idleExtraTrack)
+			elseif input.S then
+				playFrozen(sTrack); playFrozen(idleExtraTrack)
+			else
+				ensureIdleCombined()
+			end
+		elseif state == 1 then
+			-- Normal boost (congelada)
+			playFrozen(boostNormTrack)
+			bv.MaxForce = Vector3.new(800000,800000,800000)
+		elseif state == 2 then
+			-- Fast boost (congelada)
+			playFrozen(boostFastTrack)
+			bv.MaxForce = Vector3.new(1000000,1000000,1000000)
+		elseif state == 3 then
+			-- Viltrum boost (congelada)
+			playFrozen(boostVilTrack)
+			bv.MaxForce = Vector3.new(1400000,1400000,1400000)
+		end
+
+		-- UI feedback
+		updateBoostUI(state, true)
+	end
+
+	-- ciclo de boost por click sucesivo (0 -> 1 -> 2 -> 3 -> 0 ...)
+	local function cycleBoost()
+		local forwardInput = (input.W and 1 or 0) - (input.S and 1 or 0)
+		local rightInput   = (input.D and 1 or 0) - (input.A and 1 or 0)
+		local upInput      = (input.Up and 1 or 0) - (input.Down and 1 or 0)
+		local movingNow = math.abs(forwardInput) + math.abs(rightInput) + math.abs(upInput) > 0
+
+		local next = (boostState + 1) % 4 -- cycles 0..3
+		-- if next > 0 but not moving, don't activate boost
+		if next ~= 0 and not movingNow then
+			-- brief pulse to indicate "not allowed"
+			updateBoostUI(0, true)
+			boostState = 0
+			applyBoostState(0)
+			return
+		end
+
+		boostState = next
+		applyBoostState(boostState)
+	end
+
+	-- --- NUEVAS FUNCIONES: control exclusivo de animaciones W/S ---
+	local function startKeyAnim(key)
+		-- no anims si no hay fly o si un boost está activo (boosts manejan sus propias anims)
+		if not flying or boostState ~= 0 then return end
+		if key == "W" then
+			-- parar idle no congelada, mantener idleExtra congelada
+			stopTrack(idleTrack)
+			stopTrack(sTrack)
+			playNormal(wTrack)
+			playFrozen(idleExtraTrack)
+		elseif key == "S" then
+			stopTrack(idleTrack)
+			stopTrack(wTrack)
+			-- S queremos congelada
+			playFrozen(sTrack)
+			playFrozen(idleExtraTrack)
+		end
+	end
+
+	local function stopKeyAnim(key)
+		if key == "W" then
+			stopTrack(wTrack)
+			-- si no hay otra entrada de movimiento, volver a idle
+			if not input.W and not input.S then
+				ensureIdleCombined()
+			else
+				-- si S está presionada, activar S
+				if input.S then
+					startKeyAnim("S")
+				end
+			end
+		elseif key == "S" then
+			stopTrack(sTrack)
+			if not input.W and not input.S then
+				ensureIdleCombined()
+			else
+				if input.W then
+					startKeyAnim("W")
+				end
+			end
+		end
+	end
+
+	-- conexiones / inputs (ahora llaman a start/stop anim)
+	local conns = {}
+	table.insert(conns, UIS.InputBegan:Connect(function(i, processed) if processed then return end
+		if i.KeyCode == Enum.KeyCode.W then input.W = true; startKeyAnim("W") end
+		if i.KeyCode == Enum.KeyCode.A then input.A = true end
+		if i.KeyCode == Enum.KeyCode.S then input.S = true; startKeyAnim("S") end
+		if i.KeyCode == Enum.KeyCode.D then input.D = true end
+		if i.KeyCode == Enum.KeyCode.Space then input.Up = true end
+		if i.KeyCode == Enum.KeyCode.LeftControl then input.Down = true end
+	end))
+	table.insert(conns, UIS.InputEnded:Connect(function(i)
+		if i.KeyCode == Enum.KeyCode.W then input.W = false; stopKeyAnim("W") end
+		if i.KeyCode == Enum.KeyCode.A then input.A = false end
+		if i.KeyCode == Enum.KeyCode.S then input.S = false; stopKeyAnim("S") end
+		if i.KeyCode == Enum.KeyCode.D then input.D = false end
+		if i.KeyCode == Enum.KeyCode.Space then input.Up = false end
+		if i.KeyCode == Enum.KeyCode.LeftControl then input.Down = false end
+	end))
+
+	-- tactil cruceta (ahora llaman start/stop anim también)
+	table.insert(conns, btnW.MouseButton1Down:Connect(function() input.W = true; startKeyAnim("W") end))
+	table.insert(conns, btnW.MouseButton1Up:Connect(function() input.W = false; stopKeyAnim("W") end))
+	table.insert(conns, btnA.MouseButton1Down:Connect(function() input.A = true end))
+	table.insert(conns, btnA.MouseButton1Up:Connect(function() input.A = false end))
+	table.insert(conns, btnS.MouseButton1Down:Connect(function() input.S = true; startKeyAnim("S") end))
+	table.insert(conns, btnS.MouseButton1Up:Connect(function() input.S = false; stopKeyAnim("S") end))
+	table.insert(conns, btnD.MouseButton1Down:Connect(function() input.D = true end))
+	table.insert(conns, btnD.MouseButton1Up:Connect(function() input.D = false end))
+
+	-- Ascend / descend helpers (smooth over duration)
+	local function smoothChangeVertical(targetY, duration)
+		if not bv then return end
+		local elapsed = 0
+		local startVel = bv.Velocity
+		local startY = startVel.Y
+		while elapsed < duration and bv do
+			local dt = RunService.RenderStepped:Wait()
+			elapsed = elapsed + dt
+			local alpha = math.clamp(elapsed / duration, 0, 1)
+			local newY = startY + (targetY - startY) * alpha
+			-- preserve horizontal components
+			local hv = Vector3.new(bv.Velocity.X, newY, bv.Velocity.Z)
+			bv.Velocity = hv
+		end
+	end
+
+	-- Fly toggle (AJUSTADO: NO destruir UI ni desconectar conns al apagar)
+	table.insert(conns, flyBtn.MouseButton1Click:Connect(function()
+		flying = not flying
+		if flying then
+			createBodyMovers(); enableForces(); humanoid.PlatformStand = true
+			stopAllAnim(); ensureIdleCombined()
+			-- UI fly on
+			tweenColor(flyBtn, Color3.fromRGB(0,200,80), 0.18)
+			task.spawn(function() tweenJump(flyBtn, 1.06) end)
+			-- reset boost state to off
+			boostState = 0; applyBoostState(0)
+			-- tiny ascend (smooth)
+			task.spawn(function()
+				if bv then
+					local prevMax = bv.MaxForce
+					bv.MaxForce = Vector3.new(800000,800000,800000)
+					smoothChangeVertical(6, 0.5)
+					bv.MaxForce = prevMax
+				end
+			end)
+		else
+			-- apagar: limpiar fuerzas/anim/BodyMovers y dejar UI intacta para reactivar después
+			boostState = 0; applyBoostState(0)
+			-- stop active anims
+			stopAllAnim()
+			-- play landing pose frozen while descending
+			playFrozen(landingTrack)
+
+			-- do a controlled descent to ground, then cleanup forces (BUT KEEP UI/conns)
+			task.spawn(function()
+				if not bv then
+					createBodyMovers(); enableForces()
+				end
+				local prevMax = bv and bv.MaxForce or Vector3.new(400000,400000,400000)
+				if bv then bv.MaxForce = Vector3.new(1400000,1400000,1400000) end
+
+				local landed = false
+				local timeout = 6
+				local acc = 0
+				while not landed and acc < timeout do
+					local dt = RunService.RenderStepped:Wait()
+					acc = acc + dt
+					if bv then
+						local desiredDown = Vector3.new(bv.Velocity.X, -12, bv.Velocity.Z)
+						bv.Velocity = bv.Velocity:Lerp(desiredDown, 0.5)
+					end
+					local rayOrigin = hrp.Position
+					local rayDir = Vector3.new(0, -6, 0)
+					local params = RaycastParams.new()
+					params.FilterDescendantsInstances = {character}
+					params.FilterType = Enum.RaycastFilterType.Blacklist
+					local result = workspace:Raycast(rayOrigin, rayDir, params)
+					if result then
+						landed = true
+						break
+					end
+				end
+
+				-- Once landed (or timeout): restore state but KEEP UI/conns so player can fly again later
+				task.wait(0.06)
+				stopAllAnim()
+				pcall(function() humanoid.PlatformStand = false end)
+				disableForces()
+				destroyBodyMovers()
+				tweenColor(flyBtn, Color3.fromRGB(200,50,50), 0.18)
+				task.spawn(function() tweenJump(flyBtn, 0.96) end)
+			end)
+		end
+	end))
+
+	-- Boost single click (ciclar estados)
+	table.insert(conns, boostBtn.MouseButton1Click:Connect(function()
+		if not flying then
+			task.spawn(function() tweenJump(boostBtn, 1.04) end)
+			return
+		end
+		cycleBoost()
+	end))
+
+	-- render loop
+	local renderConn
+	renderConn = RunService.RenderStepped:Connect(function(dt)
+		if not flying then return end
+		if not bv or not bg then return end
+
+		t = t + dt
+
+		local cf = camera.CFrame
+		local moveDir = Vector3.zero
+		local pressingW = false
+
+		-- construir desired direction siempre relativo a cámara
+		if input.W then moveDir = moveDir + cf.LookVector; pressingW = true end
+		if input.S then moveDir = moveDir - cf.LookVector end
+		if input.A then moveDir = moveDir - cf.RightVector end
+		if input.D then moveDir = moveDir + cf.RightVector end
+		if input.Up then moveDir = moveDir + Vector3.new(0,1,0) end
+		if input.Down then moveDir = moveDir - Vector3.new(0,1,0) end
+
+		local movingNow = moveDir.Magnitude > 0.001
+
+		-- handle currentSpeed based on boostState
+		local currentSpeed = defaultSpeed
+		if boostState == 1 then currentSpeed = boostSpeed1
+		elseif boostState == 2 then currentSpeed = boostSpeed2
+		elseif boostState == 3 then currentSpeed = boostSpeed3 end
+
+		-- if boost active but no movement -> turn it off
+		if (boostState ~= 0) and not movingNow then
+			boostState = 0
+			applyBoostState(0)
+		end
+
+		-- movement physics (smooth lerp)
+		if movingNow then
+			local desiredVel = moveDir.Unit * currentSpeed
+			local lerpAmt = math.clamp(accel * dt, 0, 1)
+			bv.Velocity = bv.Velocity:Lerp(desiredVel, lerpAmt)
+		else
+			local floatY = math.sin(t * floatSpeed) * floatAmplitude
+			local desired = Vector3.new(0, floatY, 0)
+			local lerpAmt = math.clamp(accel * dt, 0, 1)
+			bv.Velocity = bv.Velocity:Lerp(desired, lerpAmt)
+		end
+
+		-- NOTE: ya no hacemos switching de anim en el render; eso lo controlan los handlers startKeyAnim/stopKeyAnim
+		-- Tilt / orientación: si boostState != 0 -> forzar -90 grados (suave), sino normales
+		local tiltX, tiltZ = 0, 0
+		if boostState ~= 0 then
+			tiltX = -90; tiltZ = 0
+		else
+			if input.W then tiltX = -tiltFrontBack end
+			if input.S then tiltX = tiltFrontBack end
+			if input.A then tiltZ = tiltSides end
+			if input.D then tiltZ = -tiltSides end
+		end
+
+		-- orientamos el personaje hacia la camara (siempre mirando donde mira la cámara)
+		local lookVec = camera.CFrame.LookVector
+		local targetCF = CFrame.new(hrp.Position, hrp.Position + lookVec) * CFrame.Angles(math.rad(tiltX), 0, math.rad(tiltZ))
+		local lerpAmount = (boostState ~= 0) and 0.6 or tiltSmooth
+		bg.CFrame = bg.CFrame:Lerp(targetCF, lerpAmount)
+	end)
+
+	table.insert(conns, renderConn)
+
+	-- cleanup (guardado en currentCleanup para respawn)
+	currentCleanup = function()
+		for _,c in ipairs(conns) do if c and c.Disconnect then c:Disconnect() end end
+		if renderConn and renderConn.Disconnect then renderConn:Disconnect() end
+		-- DO full cleanup on respawn: destroy UI and bodymovers and stop anims
+		safeDestroy(ui.gui)
+		destroyBodyMovers()
+		stopAllAnim()
+		pcall(function() humanoid.PlatformStand = false end)
+		-- restore camera fov
+		pcall(function() local tw = TweenService:Create(camera, TweenInfo.new(0.15), {FieldOfView = normalFOV}); tw:Play() end)
+	end
+
+	return { cleanup = currentCleanup }
+end
+
+-- init + respawn handling
+local function init()
+	local char = player.Character or player.CharacterAdded:Wait()
+	setupCharacter(char)
+	player.CharacterAdded:Connect(function(c)
+		if currentCleanup then currentCleanup() currentCleanup = nil end
+		task.wait(0.12)
+		setupCharacter(c)
+	end)
+end
+
+init()
